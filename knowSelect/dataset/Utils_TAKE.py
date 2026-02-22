@@ -131,8 +131,11 @@ def load_query(file, tokenizer):  # query_id	query_content
 
 
 def load_split(dataset, file):
+    print("[DEBUG] split_file abs =", os.path.abspath(file))
+
     train = set()
     dev = set()
+
     if dataset == "wizard_of_wikipedia":
         test_seen = set()
         test_unseen = set()
@@ -175,6 +178,14 @@ def load_split(dataset, file):
                     train.add(temp[0])
                 elif temp[1] == 'test':
                     test.add(temp[0])
+                elif temp[1] == 'dev':
+                    dev.add(temp[0])
+        print("====== LOAD_SPLIT RESULT ======")
+        print("train_ids:", len(train))
+        print("dev_ids:", len(dev))
+        print("test_ids:", len(test))
+        print("sample labels:", list(dev)[:3])  # 随便看3个
+        print("===============================")
         return train, dev, test
 
 
@@ -212,25 +223,84 @@ def split_data(dataset, split_file, episodes):
 
     elif dataset == "tiage":
         train, dev, test = load_split(dataset, split_file)
+        print("======")
+        print("1",len(train))
+        print("2",len(dev))
+        print(len(test))
         test_episodes = list()
         for episode in episodes:
-            # episode[0]['query_id'] 格式如 "182_0"，与 split 文件中的 ID 匹配
-            first_query_id = episode[0]['query_id']
-            if first_query_id in train:
+            if episode[0]['query_id'] in train:
+                # print("episode",episode)
+                # s = input()
+                # print("train", train)
+                # s = input()
                 train_episodes.append(episode)
-            elif first_query_id in test:
+            elif episode[0]['query_id'] in dev:
+                dev_episodes.append(episode)
+            elif episode[0]['query_id'] in test:
                 test_episodes.append(episode)
-            else:
-                # 如果首个 turn 不在任何集合中，检查对话 ID 前缀
-                dialog_prefix = first_query_id.rsplit("_", 1)[0]
-                # 检查任何以该前缀开始的 ID 是否在训练/测试集中
-                is_test = any(qid.startswith(dialog_prefix + "_") for qid in test)
-                is_train = any(qid.startswith(dialog_prefix + "_") for qid in train)
-                if is_test and not is_train:
-                    test_episodes.append(episode)
-                else:
-                    train_episodes.append(episode)
+        print("====== SPLIT RESULT ======")
+        # print("dialogs in split map:", len(dialog2label))
+        # print("dialog label counts:", Counter(dialog2label.values()))
+        print("train:", len(train_episodes))
+        print("dev:", len(dev_episodes))
+        print("test:", len(test_episodes))
+        print("==========================")
+
         return train_episodes, dev_episodes, test_episodes
+    # elif dataset == "tiage":
+    #     train_ids, dev_ids, test_ids = load_split(dataset, split_file)
+
+    #     # ---- 1) 把 query_id 标签聚合到 dialog 级别：test > dev > train ----
+    #     from collections import defaultdict, Counter
+
+    #     dialog_flags = defaultdict(set)  # dialog_id -> {"train"/"dev"/"test"}
+
+    #     def dialog_of(qid: str) -> str:
+    #         # qid 形如 "56_12"
+    #         return qid.rsplit("_", 1)[0]
+
+    #     for qid in train_ids:
+    #         dialog_flags[dialog_of(qid)].add("train")
+    #     for qid in dev_ids:
+    #         dialog_flags[dialog_of(qid)].add("dev")
+    #     for qid in test_ids:
+    #         dialog_flags[dialog_of(qid)].add("test")
+
+    #     dialog2label = {}
+    #     for d, flags in dialog_flags.items():
+    #         if "test" in flags:
+    #             dialog2label[d] = "test"
+    #         elif "dev" in flags:
+    #             dialog2label[d] = "dev"
+    #         else:
+    #             dialog2label[d] = "train"
+
+    #     # ---- 2) 用 dialog2label 去切 episodes ----
+    #     test_episodes = []
+    #     for episode in episodes:
+    #         first_query_id = episode[0]["query_id"]  # e.g. "56_0"
+    #         d = dialog_of(first_query_id)
+
+    #         label = dialog2label.get(d, "train")  # split 里找不到就默认 train
+    #         if label == "test":
+    #             test_episodes.append(episode)
+    #         elif label == "dev":
+    #             dev_episodes.append(episode)
+    #         else:
+    #             train_episodes.append(episode)
+
+        # ---- 3) 打印统计，确认切分正确 ----
+        # print("====== SPLIT RESULT ======")
+        # print("dialogs in split map:", len(dialog2label))
+        # print("dialog label counts:", Counter(dialog2label.values()))
+        # print("train:", len(train_episodes))
+        # print("dev:", len(dev_episodes))
+        # print("test:", len(test_episodes))
+        # print("==========================")
+        # s = input()
+
+        # return train_episodes, dev_episodes, test_episodes
 
 
 def load_IDLabel(file):

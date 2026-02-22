@@ -45,23 +45,70 @@ def generate_query_id(row) -> str:
     return f"{row['dialog_id']}_{row['turn_id']}"
 
 
+# def export_take_dataset(
+#     df: pd.DataFrame,
+#     output_dir: str,
+#     train_slices: List[int] = None,
+#     test_slices: List[int] = None
+# ) -> None:
 def export_take_dataset(
     df: pd.DataFrame,
     output_dir: str,
     train_slices: List[int] = None,
+    dev_slices: List[int] = None,
     test_slices: List[int] = None
 ) -> None:
     """导出 TAKE 格式数据集"""
 
+    # if train_slices is None:
+    #     train_slices = list(range(7))  # slice 0-6
+    # if test_slices is None:
+    #     test_slices = [7, 8, 9]  # slice 7-9
     if train_slices is None:
         train_slices = list(range(7))  # slice 0-6
+    if dev_slices is None:
+        dev_slices = [7]               # slice 7
     if test_slices is None:
-        test_slices = [7, 8, 9]  # slice 7-9
+        test_slices = [8, 9]           # slice 8-9
 
     os.makedirs(output_dir, exist_ok=True)
 
     # 分配 slice_id
     df = assign_slice_id(df)
+
+    # ==============================
+    # 修正 dialog_id 使其全局唯一
+    # ==============================
+
+    df = df.copy()
+
+    # 统计每个 split 的 dialog 数量
+    train_dialogs = df[df['split'] == 'train']['dialog_id'].unique()
+    dev_dialogs = df[df['split'] == 'dev']['dialog_id'].unique()
+    test_dialogs = df[df['split'] == 'test']['dialog_id'].unique()
+
+    train_dialog_count = len(train_dialogs)
+    dev_dialog_count = len(dev_dialogs)
+
+    # 构造映射表
+    train_map = {d: i for i, d in enumerate(sorted(train_dialogs))}
+    dev_map = {d: i + train_dialog_count for i, d in enumerate(sorted(dev_dialogs))}
+    test_map = {d: i + train_dialog_count + dev_dialog_count for i, d in enumerate(sorted(test_dialogs))}
+
+    def remap_dialog_id(row):
+        if row['split'] == 'train':
+            return train_map[row['dialog_id']]
+        elif row['split'] == 'dev':
+            return dev_map[row['dialog_id']]
+        elif row['split'] == 'test':
+            return test_map[row['dialog_id']]
+        else:
+            return row['dialog_id']
+
+    df['dialog_id'] = df.apply(remap_dialog_id, axis=1)
+
+
+
 
     # 生成 query_id
     df['query_id'] = df.apply(generate_query_id, axis=1)
@@ -107,19 +154,16 @@ def export_take_dataset(
                 prev_ids.append(row['query_id'])
     print(f"[OK] Generated {answer_path}")
 
-    # 5. 生成 tiage.split (query_id\ttrain/test)
+    # 5. 生成 tiage.split (query_id\ttrain/dev/test)
     split_path = os.path.join(output_dir, 'tiage.split')
-    with open(split_path, 'w', encoding='utf-8') as f:
+    with open(split_path, "w", encoding="utf-8") as f:
         for _, row in df.iterrows():
-            if row['slice_id'] in train_slices:
-                split_label = 'train'
-            elif row['slice_id'] in test_slices:
-                split_label = 'test'
-            else:
-                continue  # 跳过 dev
+            split_label = row['split']  # 直接用原 CSV 的 split
+            if split_label not in ['train', 'dev', 'test']:
+                continue
             f.write(f"{row['query_id']}\t{split_label}\n")
     print(f"[OK] Generated {split_path}")
-
+    
     # 6. 生成 ID_label.json (话题转移标签数组)
     # 按 query_id 顺序排列，-1 -> -1 (对话开头), 0 -> 0 (非转移), 1 -> 1 (转移)
     id_labels = []
@@ -146,13 +190,19 @@ def export_take_dataset(
     print(f"[OK] Generated {node_id_path}")
 
     # 打印统计信息
+    # train_count = len(df[df['slice_id'].isin(train_slices)])
+    # test_count = len(df[df['slice_id'].isin(test_slices)])
     train_count = len(df[df['slice_id'].isin(train_slices)])
+    dev_count = len(df[df['slice_id'].isin(dev_slices)])
     test_count = len(df[df['slice_id'].isin(test_slices)])
+    
     print(f"\n[统计]")
     print(f"  总节点数: {len(df)}")
     print(f"  训练集: {train_count}")
+    print(f"  验证集: {dev_count}")
     print(f"  测试集: {test_count}")
     print(f"  对话数: {df['dialog_id'].nunique()}")
+    
 
 
 def main():

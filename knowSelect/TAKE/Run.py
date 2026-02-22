@@ -61,6 +61,7 @@ def train(args):
             torch.save(test_episodes, data_path + 'test_TAKE.pkl')
 
         elif args.dataset == "tiage":
+            print("path:", data_path + args.dataset + '.split')
             train_episodes, _, test_episodes = split_data(args.dataset, data_path + args.dataset + '.split', episodes)
             print("The number of test_episodes:", len(test_episodes))
             torch.save(test_episodes, data_path + 'test_TAKE.pkl')
