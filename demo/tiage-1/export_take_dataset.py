@@ -45,6 +45,45 @@ def generate_query_id(row) -> str:
     return f"{row['dialog_id']}_{row['turn_id']}"
 
 
+def resolve_numeric_series(
+    df: pd.DataFrame,
+    candidates: List[str],
+    default_value: float = 0.0
+) -> pd.Series:
+    for col in candidates:
+        if col in df.columns:
+            return pd.to_numeric(df[col], errors='coerce').fillna(default_value).astype(float)
+    return pd.Series([default_value] * len(df), index=df.index, dtype=float)
+
+
+def load_ngacl_centrality(centrality_dir: str, train_slices: List[int]) -> Dict[int, float]:
+    records = []
+    for sid in train_slices:
+        csv_path = os.path.join(centrality_dir, f"tiage_{sid}.csv")
+        if not os.path.exists(csv_path):
+            continue
+
+        tmp = pd.read_csv(csv_path, header=None)
+        if tmp.shape[1] < 2:
+            continue
+
+        tmp = tmp.iloc[:, :2].copy()
+        tmp.columns = ['node_id', 'c_global']
+        tmp['node_id'] = pd.to_numeric(tmp['node_id'], errors='coerce')
+        tmp['c_global'] = pd.to_numeric(tmp['c_global'], errors='coerce')
+        tmp = tmp.dropna(subset=['node_id', 'c_global'])
+        if not tmp.empty:
+            records.append(tmp)
+
+    if not records:
+        return {}
+
+    merged = pd.concat(records, ignore_index=True)
+    merged['node_id'] = merged['node_id'].astype(int)
+    score_map = merged.groupby('node_id', as_index=True)['c_global'].mean().to_dict()
+    return {int(k): float(v) for k, v in score_map.items()}
+
+
 # def export_take_dataset(
 #     df: pd.DataFrame,
 #     output_dir: str,
@@ -133,10 +172,53 @@ def export_take_dataset(
 
     # 3. 生成 tiage.pool (query_id Q0 passage_id rank score model_name)
     # 最小版本：每个 query 的 pool 只包含自己
+    # C_transfer(v) = alpha * C_global(v) + beta * P(v)
+    # - C_global(v): NGACL ?????? demo/DGCN3/Centrality/alpha_1.5/tiage_0~5.csv?
+    # - P(v): participation
+    alpha = 1.0
+    beta = 1.0
+    top_k_pool = 128
+
+    centrality_dir = os.path.abspath(
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'DGCN3', 'Centrality', 'alpha_1.5')
+    )
+    ngacl_map = load_ngacl_centrality(centrality_dir, train_slices=list(range(6)))
+
+    df['c_global'] = df['node_id'].map(ngacl_map).fillna(0.0).astype(float)
+    df['participation'] = resolve_numeric_series(
+        df,
+        candidates=['participation', 'participation_coeff', 'participation_coefficient', 'P'],
+        default_value=0.0,
+    )
+    df['c_transfer'] = alpha * df['c_global'] + beta * df['participation']
+
+    # pool_path = os.path.join(output_dir, 'tiage.pool')
+    # with open(pool_path, 'w', encoding='utf-8') as f:
+    #     for _, row in df.iterrows():
+    #         f.write(f"{row['query_id']} Q0 {row['query_id']} 1 1.0 tiage\n")
+    # print(f"[OK] Generated {pool_path}")
+
+    # tiage_0~5
+    train_pool_node_ids = set(ngacl_map.keys())
+    pool_candidates = df[df['node_id'].isin(train_pool_node_ids)].copy()
+
+    # centrality
+    if pool_candidates.empty:
+        pool_candidates = df.copy()
+
+    pool_candidates = pool_candidates.sort_values('c_transfer', ascending=False)
+    if top_k_pool > 0:
+        pool_candidates = pool_candidates.head(top_k_pool)
+
     pool_path = os.path.join(output_dir, 'tiage.pool')
     with open(pool_path, 'w', encoding='utf-8') as f:
-        for _, row in df.iterrows():
-            f.write(f"{row['query_id']} Q0 {row['query_id']} 1 1.0 tiage\n")
+        for _, qrow in df.iterrows():
+            query_id = qrow['query_id']
+            for rank, cand in enumerate(pool_candidates.itertuples(index=False), start=1):
+                f.write(
+                    f"{query_id} Q0 {cand.query_id} {rank} {float(cand.c_transfer):.6f} "
+                    f"tiage_transfer_a{alpha}_b{beta}\n"
+                )
     print(f"[OK] Generated {pool_path}")
 
     # 4. 生成 tiage.answer (prev_ids\tcurrent_id\tpassage_ids\tresponse)
