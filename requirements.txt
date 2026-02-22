@@ -1,0 +1,30 @@
+# TAKE: Topic-shift Aware Knowledge sElection for Dialogue Generation
+# Python 3.9+
+
+# 深度學習框架（CUDA 11.8）
+# torch==2.0.1
+# torchvision==0.15.2
+# torchaudio==2.0.2
+torch==2.0.1+cu118
+torchvision==0.15.2+cu118
+torchaudio==2.0.2+cu118
+
+# Transformers
+transformers==4.15.0
+
+# 機器學習工具
+scikit-learn>=0.24.0
+
+# NLP 工具
+nltk>=3.6.0
+
+# 進度條
+tqdm>=4.60.0
+
+# 評估指標
+rouge-score>=0.0.4
+sacrebleu>=2.0.0
+
+# 數據處理
+pandas>=1.3.0
+numpy==1.26.4

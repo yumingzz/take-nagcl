@@ -1,0 +1,24 @@
+# --- local models / data ---
+bert-base-uncased/
+nltk_data/
+
+# --- runtime outputs ---
+logs/
+outputs/
+knowSelect/output/
+knowSelect/__MACOSX/
+*.csv
+
+# --- datasets (ignore whole dir) ---
+knowSelect/datasets/
+
+# --- python ---
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# --- os/editor ---
+.DS_Store
+.idea/
+.vscode/

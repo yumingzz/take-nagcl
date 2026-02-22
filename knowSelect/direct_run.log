@@ -1,0 +1,8 @@
+﻿ uv run python ./TAKE/Run.py --name TAKE_tiage_all_feats
+ --dataset tiage --mode train --use_centrality --central
+ity_alpha 1.5 --centrality_feature_set all --centrality_
+window 2 --node_id_json datasets/tiage/node_id.json --dg
+cn_predictions_dir ../demo/DGCN3/Centrality --edge_lists
+_dir ../demo/DGCN3/datasets/raw_data/tiage --node_mappin
+g_csv ../demo/tiage-1/outputs_nodes/tiage_anno_nodes_all
+.csv --epoches 1 
