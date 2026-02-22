@@ -177,7 +177,8 @@ def export_take_dataset(
     # - P(v): participation
     alpha = 1.0
     beta = 1.0
-    top_k_pool = 128
+    # top_k_pool = 128
+    top_k_pool = 64
 
     centrality_dir = os.path.abspath(
         os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'DGCN3', 'Centrality', 'alpha_1.5')
@@ -208,17 +209,32 @@ def export_take_dataset(
 
     pool_candidates = pool_candidates.sort_values('c_transfer', ascending=False)
     if top_k_pool > 0:
-        pool_candidates = pool_candidates.head(top_k_pool)
+        # Reserve one slot for self knowledge so total pool size equals top_k_pool.
+        pool_candidates = pool_candidates.head(max(top_k_pool - 1, 0))
 
     pool_path = os.path.join(output_dir, 'tiage.pool')
     with open(pool_path, 'w', encoding='utf-8') as f:
         for _, qrow in df.iterrows():
             query_id = qrow['query_id']
-            for rank, cand in enumerate(pool_candidates.itertuples(index=False), start=1):
+
+            # Ensure gold knowledge is always in pool for TAKE loader check.
+            self_score = float(qrow['c_transfer'])
+            f.write(
+                f"{query_id} Q0 {query_id} 1 {self_score:.6f} "
+                f"tiage_transfer_a{alpha}_b{beta}\n"
+            )
+
+            rank = 2
+            for cand in pool_candidates.itertuples(index=False):
+                if cand.query_id == query_id:
+                    continue
+                if top_k_pool > 0 and rank > top_k_pool:
+                    break
                 f.write(
                     f"{query_id} Q0 {cand.query_id} {rank} {float(cand.c_transfer):.6f} "
                     f"tiage_transfer_a{alpha}_b{beta}\n"
                 )
+                rank += 1
     print(f"[OK] Generated {pool_path}")
 
     # 4. 生成 tiage.answer (prev_ids\tcurrent_id\tpassage_ids\tresponse)
