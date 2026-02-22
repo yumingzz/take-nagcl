@@ -159,8 +159,8 @@ def train(args):
         if i == args.switch_ID:
             freeze_params(model, "teacher")
             unfreeze_params(model, "student")
-        trainer.train_epoch('train', train_dataset, collate_fn, args.train_batch_size, i, model_optimizer, model_scheduler)
-        trainer.serialize(i, model_scheduler, saved_model_path=saved_model_path)
+        train_loss = trainer.train_epoch('train', train_dataset, collate_fn, args.train_batch_size, i, model_optimizer, model_scheduler)
+        trainer.serialize(i, model_scheduler, saved_model_path=saved_model_path, metric=train_loss, metric_name="train_loss", higher_is_better=False)
 
 
 
@@ -427,7 +427,7 @@ if __name__ == '__main__':
 
     parser.add_argument("--mode", type=str, default='train')
     parser.add_argument("--resume", action='store_true')
-    parser.add_argument("--epoches", type=int, default=15)
+    parser.add_argument("--epoches", type=int, default=50)
     parser.add_argument("--accumulation_steps", type=int, default=16)
     parser.add_argument("--lr", type=float, default=6e-5) 
     parser.add_argument("--Bertlr", type=float, default=1e-5)  

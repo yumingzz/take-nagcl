@@ -10,6 +10,7 @@ from sklearn.metrics import accuracy_score, precision_recall_fscore_support
 from TAKE.Utils import *
 import json
 import os
+import shutil
 import logging
 from datetime import datetime
 
@@ -140,17 +141,52 @@ class CumulativeTrainer(object):
                final_ks_acc, shift_ks_acc, inherit_ks_acc, \
                s_shift_prob.cpu().item(), loss_ID.cpu().item(), ID_acc
 
-    def serialize(self, epoch, scheduler, saved_model_path):
+    def serialize(self, epoch, scheduler, saved_model_path, metric=None, metric_name="train_loss", higher_is_better=False):
 
         fuse_dict = {"model": self.eval_model.state_dict(), "scheduler": scheduler.state_dict()}
 
-        torch.save(fuse_dict, os.path.join(saved_model_path, '.'.join([str(epoch), 'pkl'])))
-        self.logger.info(f"Model saved: {os.path.join(saved_model_path, str(epoch) + '.pkl')}")
+        curr_ckpt = os.path.join(saved_model_path, '.'.join([str(epoch), 'pkl']))
+        torch.save(fuse_dict, curr_ckpt)
+        self.logger.info(f"Model saved: {curr_ckpt}")
+
+        if metric is not None:
+            best_info_path = os.path.join(saved_model_path, "best_metric.json")
+            best_ckpt = os.path.join(saved_model_path, "best.pkl")
+            best_info = None
+            if os.path.exists(best_info_path):
+                with open(best_info_path, 'r', encoding='utf-8') as r:
+                    best_info = json.load(r)
+
+            improved = False
+            if best_info is None or "best_metric" not in best_info:
+                improved = True
+            else:
+                prev_best = float(best_info["best_metric"])
+                improved = (metric > prev_best) if higher_is_better else (metric < prev_best)
+
+            if improved:
+                shutil.copyfile(curr_ckpt, best_ckpt)
+                best_info = {
+                    "best_epoch": int(epoch),
+                    "best_metric": float(metric),
+                    "metric_name": metric_name,
+                    "higher_is_better": bool(higher_is_better)
+                }
+                with open(best_info_path, 'w', encoding='utf-8') as w:
+                    json.dump(best_info, w)
+                self.logger.info(f"Best model updated: {best_ckpt} ({metric_name}={float(metric):.6f})")
 
         with open(saved_model_path + "checkpoints.json", 'r', encoding='utf-8') as r:
             checkpoints = json.load(r)
 
         checkpoints["time"].append(epoch)
+
+        # Keep only the latest checkpoint file to save disk space.
+        if len(checkpoints["time"]) >= 2:
+            prev_epoch = checkpoints["time"][-2]
+            prev_ckpt = os.path.join(saved_model_path, '.'.join([str(prev_epoch), 'pkl']))
+            if os.path.exists(prev_ckpt):
+                os.remove(prev_ckpt)
 
         with open(saved_model_path + "checkpoints.json", 'w', encoding='utf-8') as w:
             json.dump(checkpoints, w)
@@ -179,6 +215,7 @@ class CumulativeTrainer(object):
         accu_inherit_ks_acc = 0.
         accu_ID_acc = 0.
         accu_s_shift_prob = 0.
+        total_train_loss = 0.0
 
         step = 0
 
@@ -200,6 +237,7 @@ class CumulativeTrainer(object):
             accu_loss_ks += loss_ks
             accu_loss_distill += loss_distill
             accu_loss_ID += loss_ID
+            total_train_loss += (loss_ks + loss_distill + loss_ID)
             accu_final_ks_acc += final_ks_acc
             accu_shift_ks_acc += shift_ks_acc
             accu_inherit_ks_acc += inherit_ks_acc
@@ -258,6 +296,7 @@ class CumulativeTrainer(object):
         self.logger.info(f'Epoch {epoch} completed | Total time: {epoch_time:.1f}s | Batches: {count_batch}')
         self.logger.info(f'{"="*60}')
         sys.stdout.flush()
+        return total_train_loss / max(count_batch, 1)
 
 
     def predict(self, method, dataset, collate_fn, batch_size, epoch, output_path):

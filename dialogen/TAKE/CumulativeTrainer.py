@@ -10,6 +10,7 @@ from sklearn.metrics import accuracy_score
 from TAKE.Utils import *
 import json
 import os
+import shutil
 
 
 def rounder(num, places):
@@ -85,17 +86,52 @@ class CumulativeTrainer(object):
             return loss_g.cpu().item()
 
 
-    def serialize(self, epoch, scheduler, saved_model_path):
+    def serialize(self, epoch, scheduler, saved_model_path, metric=None, metric_name="train_loss", higher_is_better=False):
 
         fuse_dict = {"model": self.eval_model.state_dict(), "scheduler": scheduler.state_dict()}
 
-        torch.save(fuse_dict, os.path.join(saved_model_path, '.'.join([str(epoch), 'pkl'])))
+        curr_ckpt = os.path.join(saved_model_path, '.'.join([str(epoch), 'pkl']))
+        torch.save(fuse_dict, curr_ckpt)
         print("Saved epoch {} model".format(epoch))
+
+        if metric is not None:
+            best_info_path = os.path.join(saved_model_path, "best_metric.json")
+            best_ckpt = os.path.join(saved_model_path, "best.pkl")
+            best_info = None
+            if os.path.exists(best_info_path):
+                with open(best_info_path, 'r', encoding='utf-8') as r:
+                    best_info = json.load(r)
+
+            improved = False
+            if best_info is None or "best_metric" not in best_info:
+                improved = True
+            else:
+                prev_best = float(best_info["best_metric"])
+                improved = (metric > prev_best) if higher_is_better else (metric < prev_best)
+
+            if improved:
+                shutil.copyfile(curr_ckpt, best_ckpt)
+                best_info = {
+                    "best_epoch": int(epoch),
+                    "best_metric": float(metric),
+                    "metric_name": metric_name,
+                    "higher_is_better": bool(higher_is_better)
+                }
+                with open(best_info_path, 'w', encoding='utf-8') as w:
+                    json.dump(best_info, w)
+                print("Best model updated: {} ({}={:.6f})".format(best_ckpt, metric_name, float(metric)))
 
         with open(saved_model_path + "checkpoints.json", 'r', encoding='utf-8') as r:
             checkpoints = json.load(r)
 
         checkpoints["time"].append(epoch)
+
+        # Keep only the latest checkpoint file to save disk space.
+        if len(checkpoints["time"]) >= 2:
+            prev_epoch = checkpoints["time"][-2]
+            prev_ckpt = os.path.join(saved_model_path, '.'.join([str(prev_epoch), 'pkl']))
+            if os.path.exists(prev_ckpt):
+                os.remove(prev_ckpt)
 
         with open(saved_model_path + "checkpoints.json", 'w', encoding='utf-8') as w:
             json.dump(checkpoints, w)
@@ -112,6 +148,7 @@ class CumulativeTrainer(object):
 
             accu_loss_g = 0.
             step = 0
+            total_train_loss = 0.0
 
             for j, data in enumerate(train_loader, 0):
                 data_cuda = dict()
@@ -126,6 +163,7 @@ class CumulativeTrainer(object):
                 loss_g = self.train_batch(epoch, data, method=method, optimizer=optimizer, scheduler=scheduler)
             #accumulate loss
                 accu_loss_g += loss_g
+                total_train_loss += loss_g
                 step +=1
 
                 if j >= 0 and j % 1000 == 0:
@@ -148,6 +186,7 @@ class CumulativeTrainer(object):
                 del loss_g
             
             sys.stdout.flush()
+            return total_train_loss / max(count_batch, 1)
 
 
     def predict(self, method, dataset, collate_fn, batch_size, epoch, output_path):

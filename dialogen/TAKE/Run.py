@@ -96,8 +96,8 @@ def train(args):
         # args.train_batch_size = 4
         args.train_batch_size = 1
         args.accumulation_steps = 16
-        trainer.train_epoch('train', gpt2_train_dataset, collate_fn_gpt2, args.train_batch_size, i, model_optimizer, model_scheduler)
-        trainer.serialize(i, model_scheduler, saved_model_path=gen_saved_model_path) 
+        train_loss = trainer.train_epoch('train', gpt2_train_dataset, collate_fn_gpt2, args.train_batch_size, i, model_optimizer, model_scheduler)
+        trainer.serialize(i, model_scheduler, saved_model_path=gen_saved_model_path, metric=train_loss, metric_name="train_loss", higher_is_better=False) 
         del gpt2_train_dataset
 
 def inference(args):
