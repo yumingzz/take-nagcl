@@ -6,7 +6,7 @@ from evaluation.Eval_Bleu import *
 from evaluation.Eval_Meteor import *
 from evaluation.Eval_F1 import *
 from torch.utils.data.distributed import DistributedSampler
-from sklearn.metrics import accuracy_score, precision_recall_fscore_support
+from sklearn.metrics import accuracy_score, precision_recall_fscore_support, confusion_matrix
 from TAKE.Utils import *
 import json
 import os
@@ -518,13 +518,25 @@ class CumulativeTrainer(object):
             valid_mask = (accumulative_episode_mask == 1) & (accumulative_ID_label != -1)
             valid_true = accumulative_ID_label[valid_mask].detach().cpu().numpy()
             valid_pred = accumulative_ID_pred[valid_mask].detach().cpu().numpy()
-            precision, recall, f1, _ = precision_recall_fscore_support(
-                valid_true, valid_pred, average='binary', zero_division=0
-            )
+            if len(valid_true) == 0:
+                precision, recall, f1 = 0.0, 0.0, 0.0
+                tn, fp, fn, tp = 0, 0, 0, 0
+                pred_positive_ratio = 0.0
+            else:
+                precision, recall, f1, _ = precision_recall_fscore_support(
+                    valid_true, valid_pred, average='binary', zero_division=0
+                )
+                tn, fp, fn, tp = confusion_matrix(valid_true, valid_pred, labels=[0, 1]).ravel()
+                pred_positive_ratio = float((valid_pred == 1).mean()) * 100.0
             shift_prf = {
                 "precision": rounder(precision * 100, 2),
                 "recall": rounder(recall * 100, 2),
-                "f1": rounder(f1 * 100, 2)
+                "f1": rounder(f1 * 100, 2),
+                "pred_pos_ratio": rounder(pred_positive_ratio, 2),
+                "tn": int(tn),
+                "fp": int(fp),
+                "fn": int(fn),
+                "tp": int(tp)
             }
 
 
@@ -545,6 +557,16 @@ class CumulativeTrainer(object):
         print("shift KNOW_ACC", shift_ks_acc)
         print("inherit KNOW_ACC", inherit_ks_acc)
         print("ID_ACC", ID_acc)
+        print(
+            "ID_CONFUSION",
+            {
+                "tn": shift_prf.get("tn"),
+                "fp": shift_prf.get("fp"),
+                "fn": shift_prf.get("fn"),
+                "tp": shift_prf.get("tp"),
+                "pred_pos_ratio": shift_prf.get("pred_pos_ratio"),
+            },
+        )
 
         metric_output = {**final_ks_acc, **shift_ks_acc, **inherit_ks_acc, **ID_acc, **shift_prf}
         print({epoch+"_"+dataset_name: metric_output})

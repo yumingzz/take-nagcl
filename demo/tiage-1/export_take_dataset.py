@@ -84,6 +84,50 @@ def load_ngacl_centrality(centrality_dir: str, train_slices: List[int]) -> Dict[
     return {int(k): float(v) for k, v in score_map.items()}
 
 
+def build_gold_knowledge_map(df: pd.DataFrame, history_window: int = 5) -> Dict[str, str]:
+    gold_map: Dict[str, str] = {}
+
+    for _, group in df.groupby('dialog_id', sort=False):
+        group = group.sort_values('turn_id').copy()
+        shift = pd.to_numeric(group['shift_label'], errors='coerce').fillna(-1).astype(int)
+        group['topic_seg_id'] = (shift == 1).cumsum()
+
+        rows = list(group.itertuples(index=False))
+        for idx, row in enumerate(rows):
+            qid = row.query_id
+            if idx == 0:
+                gold_map[qid] = qid
+                continue
+
+            start = max(0, idx - history_window)
+            history = rows[start:idx]
+            same_topic_hist = [r for r in history if r.topic_seg_id == row.topic_seg_id]
+
+            if same_topic_hist:
+                gold_map[qid] = same_topic_hist[-1].query_id
+            else:
+                gold_map[qid] = history[-1].query_id
+
+    return gold_map
+
+
+def build_history_candidate_map(df: pd.DataFrame, history_window: int = 8) -> Dict[str, List[str]]:
+    history_map: Dict[str, List[str]] = {}
+
+    for _, group in df.groupby('dialog_id', sort=False):
+        group = group.sort_values('turn_id').copy()
+        rows = list(group.itertuples(index=False))
+        for idx, row in enumerate(rows):
+            qid = row.query_id
+            if idx == 0:
+                history_map[qid] = []
+                continue
+            start = max(0, idx - history_window)
+            history = [r.query_id for r in rows[start:idx]]
+            history_map[qid] = list(reversed(history))
+    return history_map
+
+
 # def export_take_dataset(
 #     df: pd.DataFrame,
 #     output_dir: str,
@@ -173,8 +217,9 @@ def export_take_dataset(
     # 3. 生成 tiage.pool (query_id Q0 passage_id rank score model_name)
     # 最小版本：每个 query 的 pool 只包含自己
     # C_transfer(v) = alpha * C_global(v) + beta * P(v)
-    # - C_global(v): NGACL ?????? demo/DGCN3/Centrality/alpha_1.5/tiage_0~5.csv?
+    # - C_global(v): NGACL centrality
     # - P(v): participation
+    # query-specific pool (no graph candidates): history window + global fallback
     alpha = 1.0
     beta = 1.0
     # top_k_pool = 128
@@ -192,6 +237,9 @@ def export_take_dataset(
         default_value=0.0,
     )
     df['c_transfer'] = alpha * df['c_global'] + beta * df['participation']
+    gold_knowledge_map = build_gold_knowledge_map(df, history_window=5)
+    history_candidate_map = build_history_candidate_map(df, history_window=8)
+    score_map = dict(zip(df['query_id'], df['c_transfer']))
 
     # pool_path = os.path.join(output_dir, 'tiage.pool')
     # with open(pool_path, 'w', encoding='utf-8') as f:
@@ -199,7 +247,7 @@ def export_take_dataset(
     #         f.write(f"{row['query_id']} Q0 {row['query_id']} 1 1.0 tiage\n")
     # print(f"[OK] Generated {pool_path}")
 
-    # tiage_0~5
+    # Global fallback candidates (ranked by C_transfer)
     train_pool_node_ids = set(ngacl_map.keys())
     pool_candidates = df[df['node_id'].isin(train_pool_node_ids)].copy()
 
@@ -208,25 +256,46 @@ def export_take_dataset(
         pool_candidates = df.copy()
 
     pool_candidates = pool_candidates.sort_values('c_transfer', ascending=False)
-    if top_k_pool > 0:
-        # Reserve one slot for self knowledge so total pool size equals top_k_pool.
-        pool_candidates = pool_candidates.head(max(top_k_pool - 1, 0))
 
     pool_path = os.path.join(output_dir, 'tiage.pool')
     with open(pool_path, 'w', encoding='utf-8') as f:
         for _, qrow in df.iterrows():
             query_id = qrow['query_id']
+            gold_id = gold_knowledge_map.get(query_id, query_id)
+            already_added = set()
 
-            # Ensure gold knowledge is always in pool for TAKE loader check.
-            self_score = float(qrow['c_transfer'])
-            f.write(
-                f"{query_id} Q0 {query_id} 1 {self_score:.6f} "
-                f"tiage_transfer_a{alpha}_b{beta}\n"
-            )
+            rank = 1
+            mandatory_ids = [gold_id, query_id]
+            for pid in mandatory_ids:
+                if pid in already_added:
+                    continue
+                if top_k_pool > 0 and rank > top_k_pool:
+                    break
+                score = float(score_map.get(pid, 0.0))
+                f.write(
+                    f"{query_id} Q0 {pid} {rank} {score:.6f} "
+                    f"tiage_transfer_a{alpha}_b{beta}\n"
+                )
+                already_added.add(pid)
+                rank += 1
 
-            rank = 2
+            # Query-specific candidates from local dialog history.
+            for pid in history_candidate_map.get(query_id, []):
+                if pid in already_added:
+                    continue
+                if top_k_pool > 0 and rank > top_k_pool:
+                    break
+                score = float(score_map.get(pid, 0.0))
+                f.write(
+                    f"{query_id} Q0 {pid} {rank} {score:.6f} "
+                    f"tiage_transfer_a{alpha}_b{beta}\n"
+                )
+                already_added.add(pid)
+                rank += 1
+
+            # Fill the rest with globally ranked candidates.
             for cand in pool_candidates.itertuples(index=False):
-                if cand.query_id == query_id:
+                if cand.query_id in already_added:
                     continue
                 if top_k_pool > 0 and rank > top_k_pool:
                     break
@@ -248,7 +317,8 @@ def export_take_dataset(
             for _, row in group.iterrows():
                 prev_str = ';'.join(prev_ids) if prev_ids else ''
                 # 最小版本：passage_id 就是当前 query_id
-                f.write(f"{prev_str}\t{row['query_id']}\t{row['query_id']}\t{row['text']}\n")
+                gold_id = gold_knowledge_map.get(row['query_id'], row['query_id'])
+                f.write(f"{prev_str}\t{row['query_id']}\t{gold_id}\t{row['text']}\n")
                 prev_ids.append(row['query_id'])
     print(f"[OK] Generated {answer_path}")
 
